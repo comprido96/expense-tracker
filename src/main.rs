@@ -1,55 +1,50 @@
-#![allow(unused)]
+#![allow(unused)] // For early development.
 
-use axum::{middleware, response::{Html, IntoResponse, Response}, routing::get, Router};
-use model::ModelController;
-use tokio::net::TcpListener;
-use tower_cookies::CookieManagerLayer;
+// region:    --- Modules
 
-// with this you can import it in other modules
+mod ctx;
+mod error;
+mod log;
+mod model;
+mod web;
+
 pub use self::error::{Error, Result};
 
-mod error;
-mod web;
-mod model;
+use crate::model::ModelManager;
+use crate::web::mw_auth::mw_ctx_resolve;
+use crate::web::mw_res_map::mw_reponse_map;
+use crate::web::{routes_login, routes_static};
+use axum::{middleware, Router};
+use std::net::SocketAddr;
+use tower_cookies::CookieManagerLayer;
+
+// endregion: --- Modules
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mc = ModelController::new().await?;
+	// Initialize ModelManager.
+	let mm = ModelManager::new().await?;
 
-    let routes_api = web::routes_tickets::routes(mc.clone())
-    .route_layer(middleware::from_fn(web::mw_auth::mw_require_auth));
+	// -- Define Routes
+	// let routes_rpc = rpc::routes(mm.clone())
+	//   .route_layer(middleware::from_fn(mw_ctx_require));
 
-    let app = Router::new()
-    .merge(routes_root())
-    .merge(web::routes_login::routes())
-    .nest("/api", routes_api)
-    .layer(middleware::map_response(main_response_mapper))
-    .layer(CookieManagerLayer::new());
+	let routes_all = Router::new()
+		.merge(routes_login::routes())
+		// .nest("/api", routes_rpc)
+		.layer(middleware::map_response(mw_reponse_map))
+		.layer(middleware::from_fn_with_state(mm.clone(), mw_ctx_resolve))
+		.layer(CookieManagerLayer::new())
+		.fallback_service(routes_static::serve_dir());
 
-    let addr = "127.0.0.1:8080";
+	// region:    --- Start Server
+	let addr = "127.0.0.1:8080";
 
     let listener = TcpListener::bind(addr).await.unwrap();
     println!("LISTENING ON ADDR {}\n", addr);
 
     axum::serve(listener, app).await.unwrap();
+	// endregion: --- Start Server
 
-    Ok(())
-}
-
-async fn main_response_mapper(res: Response) -> Response {
-    println!("->> {:<12} - main_response_mapper", "RES_MAPPER");
-
-    println!();
-
-    res
-}
-
-fn routes_root() -> Router {
-    Router::new()
-    .route("/", get(handler_root))
-}
-
-async fn handler_root() -> impl IntoResponse {
-    println!("->> {:<12} - handler_root", "HANDLER");
-    Html("Hello World!")
+	Ok(())
 }
